@@ -1,0 +1,355 @@
+clc; close all; clear all;
+
+% Input setup
+shot_number = [1,2,3];            % shot number 
+data = '2023.03.21';          % shots data
+
+freq_axis = [0.5:1:6];        % study frequency in GHz 
+
+ch_voltage = 1;               % channel with Voltage signal
+ch_current = 2;               % channel with Current signal
+ch_MW = 3;                    % channel with Microwave signal
+ 
+time_delay(ch_voltage) = [0]; % time delay Voltage in ns
+time_delay(ch_current) = [0]; % time delay Current in ns
+time_delay(ch_MW) = [0];      % time delay MW in ns
+
+att(ch_voltage) = [0];        % Voltage attenuator
+att(ch_current) = [0];        % Current attenuator
+att(ch_MW) = [30];            % MW attenuator in dB 
+
+RC = 240;                     % Rogowskii coil coefficient in A/V
+
+distance = 1.48;              % distance between D-dot and antenna or output windows 
+antenna = 'Yes';              % presence or absence of an antenna in the experiment (affects the distribution and power)
+
+minimum_MW = 5*10^(-3);       % minimum value for MW signal
+
+
+for pos = 1:length(shot_number)
+
+        % Data reading
+        temp_filename = ['shot ',num2str(shot_number(pos),'%02d'),'.csv'];
+                path = ['/MATLAB Drive/',num2str(data,'%02d'),'/'];
+             %  path = ['/MATLAB Drive/'];
+                %%%%% new path using data
+        temp_filename = [path,temp_filename];
+        data = readmatrix(temp_filename);
+        data = data(30:end-30,:);
+                        
+        % Define parameters
+        time = data(:,1);
+        %time_shift = min(time);    
+        %time_full = (time-time_shift).*1e9;              % full time with 0 in ns 
+        %time_shift = time_shift*1e9;
+       
+        signal_MW = data(:,ch_MW+1);                     % signal of microwave
+        base_line = mean(signal_MW(1:500));
+        signal_MW = signal_MW - base_line;
+        signal = signal_MW./max(signal_MW);              % normalizef signal of MW
+    
+        current = data(:,ch_current+1);                  % signal of current
+        base_line = mean(current(1:500));
+        current = current - base_line;
+        
+        voltage = data(:,ch_voltage+1);                  % signal of voltage
+        base_line = mean(voltage(1:500));
+        voltage = voltage - base_line;
+        
+        if max(abs(signal_MW)) < minimum_MW 
+            'Shot without MW' 
+        else 
+            % Determining the time of the MW signal 
+            threshold = 0.05 * max(abs(signal_MW));                   % Определяем порог, равный 5% от максимального значения сигнала
+            first_time = find(abs(signal) > threshold, 1);            % Определяем первый момент времени, когда значение сигнала превышает порог
+            last_time = find(abs(signal) > threshold, 1, 'last');     % Определяем последний момент времени, когда значение сигнала превышает порог
+            
+            signal = signal((first_time-2000):(last_time+2000));
+            time_MW = time((first_time-2000):(last_time+2000)); 
+            time_shift = min(time_MW);
+            time_MW = (time_MW - time_shift)*1e9;
+            time_shift = time_shift*1e9;
+           
+            % Wavelet Setting
+            h = (time_MW(11,1)-time_MW(1,1))/10;
+            NWavelet = (4/h);
+            b=5;
+            
+            length(time_MW)
+            length(int32(NWavelet:1:length(signal)-NWavelet))
+            W = zeros(length(freq_axis),length(int32(NWavelet:1:length(signal)-NWavelet)));
+      
+            parfor Nfreq = 1:length(freq_axis)
+                temp_omega = freq_axis(Nfreq);
+                
+                [Wavelet, Morlet{Nfreq}, temp_W, temp_time{Nfreq}] = TimeFreqSpec2(time_MW',signal',h,temp_omega,Nfreq,NWavelet,b);
+                
+                W(Nfreq,:) = temp_W(1:length(int32(NWavelet:1:length(signal)-NWavelet)));
+                counting = length(freq_axis);
+                percentage = Nfreq/counting;
+                clc;
+                disp(['The calculation for shot number of:',num2str(shot_number(pos)),' has finish of:',num2str(percentage),'%.'])
+            end
+
+            time_axis = temp_time{end};
+            time_axis_freq = time_axis((1:length(int32(NWavelet:1:length(signal)-NWavelet))));
+     
+            clear ('temp_peak_freq')
+           
+            % Calculation intensity?
+            for j = 1:length(W(1,:))
+                [temp_peak(j),temp_peak_index] = max(W(:,j));
+                temp_peak_freq(j) = freq_axis(temp_peak_index);
+                peak_W(:,j) = W(:,j)./temp_peak(j);
+            end
+            peak_freq = temp_peak_freq;
+        
+            % Calculation signals of voltage, current and power
+            [voltage, current, signal_MW, power, power_MW, Q, time_power] = VolCurMW(time*1e9, voltage, current, signal_MW, RC, att, ch_voltage, ch_current, ch_MW, time_delay, time_axis_freq, peak_freq, distance, antenna);
+             
+            
+             % Main Figures
+        figure(1)
+        subplot(3,1,1)
+        hold on
+        plot(time_MW+time_shift-time_delay(ch_MW),signal,'-k','linewidth',1)
+        xlabel('Time [ns]')
+        ylabel('Normalized E field [a.u.]')
+        box on
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';
+        hold off
+
+        subplot(3,1,2)
+        hold on
+        surf(time_axis_freq+time_shift-time_delay(ch_MW),freq_axis,W/max(temp_peak),'FaceColor','interp','LineStyle','none','LineWidth',4)
+        view(2)
+        colormap('Jet')
+        xlabel('Time [ns]')
+        ylabel('Frequency [GHz]')
+        hold off
+        cb = colorbar('southoutside');       
+        set(cb, 'YTick', [0:0.1:1]);
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';       
+        
+        subplot(3,1,3)
+        plot(time_axis_freq+time_shift-time_delay(ch_MW),peak_freq,'.r','LineWidth',1)
+       % ylim([1.6 2.4])    % The frequency axis
+        xlabel('Time [ns]')
+        ylabel('Frequency [GHz]')
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';
+        
+        
+        f1 = figure(1);
+        set(f1, 'units', 'normalized', 'outerposition', [0 0 0.5 1]);
+        f1.Name = 'Time-domain frequency analysis';
+        
+        
+        
+        figure(2)
+        subplot(3,1,1)
+        plot(time+time_shift-time_delay(ch_MW),signal_MW,'.r','LineWidth',1)
+        xlabel('Time [ns]')
+        ylabel('MW [V/m]')
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';
+        
+        subplot(3,1,2)
+        hold on
+        plot(time+time_shift-time_delay(ch_MW),envelope(power_MW,10,'peak'),'.r','LineWidth',1)
+        plot(time+time_shift-time_delay(ch_MW),5,'.b','LineWidth',1)
+        plot(time+time_shift-time_delay(ch_MW),power/sqrt(100),'.g','LineWidth',1)
+        plot(time+time_shift-time_delay(ch_MW),power/sqrt(10),'.g','LineWidth',1)
+        legend({'Envelope MW power sign','5 MW', '1% MW signal', '10% MW signal'})
+        xlabel('Time [ns]')
+        ylabel('MW [V/m]')
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';
+        hold off
+        
+        subplot(3,1,3)
+        plot(time_power+time_shift,Q)
+        xlabel('Time [ns]')
+        ylabel('MW [V/m]')
+        ax = gca;
+        ax.FontName = 'Times New Roman';
+        ax.FontSize = 12;
+        ax.FontWeight = 'bold';
+        
+        f2 = figure(2);
+        set(f2, 'units', 'normalized', 'outerposition', [0.5 0 0.5 1]);
+        f2.Name = 'Time-domain frequency analysis 2';
+          
+        
+        
+        save_name_data = ['Data shot ',num2str(shot_number(pos),'%02d'),'.mst'];
+        save_name_fig1 = ['Fig 1 shot ',num2str(shot_number(pos),'%02d'),'.fig'];
+        save_name_fig2 = ['Fig 2 shot ',num2str(shot_number(pos),'%02d'),'.fig'];
+        
+        saveas(save_name_fig1);
+        saveas(save_name_fig2);
+        save(save_name_data);
+        end 
+end 
+
+   
+     
+
+%% Figures of the wavelets for last shot
+figure(3)
+hold on
+temp_morlet_1 = Morlet{1};
+temp_morlet_2 = Morlet{end};
+plot((-NWavelet:NWavelet).*h,real(temp_morlet_1(1:length(-NWavelet:NWavelet))))
+plot((-NWavelet:NWavelet).*h+2,real(temp_morlet_2(1:length(-NWavelet:NWavelet))))
+plot(time*1e9,signal_MW./max(signal_MW))
+legend({'Morlet wavelet example low freq','Morlet wavelet example high freq', 'MW signal'})
+figure(1).Name = ['Figures of the wavelets for shot ', num2str(shot_number(pos),'%02d')];
+hold off
+box on   
+
+
+
+
+
+
+
+
+
+
+function [Wavelet, Morlet, temp_W,time_axis] = TimeFreqSpec2(time,signal,h,temp_omega,Nfreq,NWavelet,b)
+
+m = double(-NWavelet:NWavelet);
+Morlet = exp(1i.*2.*pi.*temp_omega.*m.*h).*exp(-0.5.*(m.*h.*2.*pi.*temp_omega./b).^2);
+
+ind = 0;
+
+for m = int32(NWavelet:1:length(signal)-NWavelet)
+    ind = ind+1;
+    Wavelet(Nfreq,ind) = 0;
+    time_axis(ind) = time(m);
+    
+    for temp_m = 1:2*NWavelet+1
+        Wavelet(Nfreq,ind) =  Wavelet(Nfreq,ind)+Morlet(temp_m)*signal(m-NWavelet+temp_m);
+    end
+    
+    temp_W(ind) = abs(Wavelet(Nfreq,ind))^2;
+    
+end
+
+end
+
+
+
+
+
+
+function [voltage, current, signal_MW, power, power_MW, Q, time_power] = VolCurMW(time, voltage, current, signal_MW, RC, att, ch_voltage, ch_current, ch_MW, time_delay, time_axis_freq, peak_freq, distance, antenna)
+   
+   % Additional parameters 
+   Ns = 20;               % Smoothing coefficient 
+   
+   e0 = 8.854*10^(-12);   % Dielectric constant of free space in F/m
+   Z = 50;                % Impedance of the balun in Ohm
+   S = 2*10^(-4);         % Cross-section area of the D-dot dipole in m2 
+   
+   step = 10;             % Шаг по углу измерения in degree
+   
+   % Spatial distribution of the electric field of the HРM pulse in experiment with antenna
+   dist_with(1) = [1];    % Распределение СВЧ под углом в 0 градусов от оси с D-dot
+   dist_with(2) = [0.76]; % Распределение СВЧ под углом в 10 градусов от оси с D-dot
+   dist_with(3) = [0.56];
+   dist_with(4) = [0.40];
+   dist_with(5) = [0.29];
+   dist_with(6) = [0.20];
+   dist_with(7) = [0.16];
+   dist_with(8) = [0.15];
+   dist_with(9) = [0.18];
+   dist_with(10)= [0.25]; % Распределение СВЧ под углом в 90 градусов от оси с D-dot
+    
+   % Spatial distribution of the electric field of the HРM pulse in experiment without antenna
+   dist_without(1) = [1];   % Распределение СВЧ под углом в 0 градусов от оси с D-dot
+   dist_without(2) = [0.2]; % Распределение СВЧ под углом в 10 градусов от оси с D-dot
+   dist_without(3) = [0.2];
+   dist_without(4) = [0.2];
+   dist_without(5) = [0.2];
+   dist_without(6) = [0.2];
+   dist_without(7) = [0.2];
+   dist_without(8) = [0.2];
+   dist_without(9) = [0.2];
+   dist_without(10)= [0.2]; % Распределение СВЧ под углом в 90 градусов от оси с D-dot
+   
+   
+   % Выбор распределения с антенной или без
+   dist = 0;
+   if antenna == 'Yes' 
+       dist = dist_with; 
+   elseif antenna == 'No'    
+       dist = dist_without;
+   end
+    
+   % Processing of a voltage signal
+   voltage = smooth(voltage*att(ch_voltage), Ns);
+   time_voltage = time - time_delay(ch_voltage);
+    
+   % Processing of a current signal
+   current = smooth(current*RC*att(ch_current), Ns);
+   time_current = time - time_delay(ch_current);
+   
+   time_power = intersect(time_voltage,time_current); % пересечение времён напряжения и тока 
+   Q = current(find(ismember(time_current,time_power))).*voltage(find(ismember(time_voltage,time_power)))*10^(-6); % мощность генератора в MW   
+      
+   % Processing of a microwave signal 
+   freq = interp1(time_axis_freq, peak_freq, time); % Частоты определены не на всех временах, поэтому, пусть частота равна бесконечности в не определенные моменты времени (вначале и в конце временного интервала)
+   freq(isnan(freq)) = Inf; 
+   
+   signal_MW = (signal_MW*(10^(att(3)/20))/(2*pi*e0*Z*S))./(freq*10^9); % Сигнал СВЧ с учетом частоты и делителей in V/m
+   
+   max_MW = max(abs(signal_MW));
+   envel_MW = envelope(abs(signal_MW),50,'peak');
+   
+    
+   for index = 1:length(signal_MW)
+       for pos = 1:length(dist)       
+           if pos < length(dist)
+               H(pos) = (1-sin(deg2rad(90-(step/2)-(pos-1)*10)))*distance;
+           else 
+               H(pos) = (1-sin(deg2rad(0)))*distance;
+           end
+           S(pos) = 2*pi*distance*H(pos)-sum(S); % in m2
+           P(pos) = (signal_MW(index)*dist(pos)/19)^2;     % in W/m2 
+           P2(pos) = P(pos)*S(pos);              % in W 
+       end          
+       power_MW(index) = sum(P2)*10^(-6);
+       S=0;
+   end
+       
+   for pos = 1:length(dist)       
+       if pos < length(dist)
+           H(pos) = (1-sin(deg2rad(90-(step/2)-(pos-1)*10)))*distance;
+       else 
+           H(pos) = (1-sin(deg2rad(0)))*distance;
+       end
+       S(pos) = 2*pi*distance*H(pos)-sum(S); % in m2
+       P(pos) = (max_MW*dist(pos)/19)^2;     % in W/m2 
+       P2(pos) = P(pos)*S(pos);              % in W
+   end    
+       
+   power = sum(P2)*10^(-6);         % итоговая мощность в максимуме СВЧ in MW 
+   
+end
+
+
+       
